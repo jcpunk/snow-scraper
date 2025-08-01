@@ -143,8 +143,6 @@ class ServiceNowCMDBExplorer:
         """Resolve a list of DNS names to IPv4 and IPv6 addresses"""
         result = {}
 
-        self.stats["dns_records_checked_ipv4"] = 0
-        self.stats["dns_records_checked_ipv6"] = 0
         for name in dns_names:
             ipv4, ipv6 = [], []
 
@@ -380,6 +378,8 @@ class ServiceNowCMDBExplorer:
                 # Continue without DNS records - CIs will have empty dns_records lists
 
             self.logger.info(f"Resolving DNS names to IP addresses")
+            self.stats["dns_records_checked_ipv4"] = 0
+            self.stats["dns_records_checked_ipv6"] = 0
             try:
                 for sysid in details:
                     if details[sysid]['dns_records']:
