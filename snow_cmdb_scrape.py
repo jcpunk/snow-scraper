@@ -134,6 +134,88 @@ class ServiceNowCMDBExplorer:
 
         return "^".join(query_parts)
 
+    def get_dns_records_bulk(self, sys_ids, include_inactive=False):
+        """Get DNS records for multiple CI sys_ids with intelligent batching"""
+        if not sys_ids:
+            return {}
+
+        dns_records_map = defaultdict(list)
+        batch_size = self._estimate_batch_size(sys_ids)
+
+        self.logger.debug(f"Fetching DNS records for {len(sys_ids)} CIs with batch size {batch_size}")
+
+        # Process in batches
+        for i in range(0, len(sys_ids), batch_size):
+            batch = sys_ids[i : i + batch_size]
+            self.logger.debug(f"Processing DNS batch {i//batch_size + 1}: {len(batch)} items")
+
+            try:
+                # Build query for batch of sys_ids - using IN operator for batch
+                # For reference fields, we need to use the field name directly with IN
+                query = f"u_cmdb_ciIN{','.join(batch)}"
+                
+                if not include_inactive:
+                    query += "^u_active=true"
+
+                params = {
+                    "sysparm_query": query,
+                    "sysparm_fields": "u_cmdb_ci,name,u_active",
+                    "sysparm_limit": str(len(batch) * 10),  # Allow multiple DNS records per CI
+                    "sysparm_display_value": "false",
+                }
+
+                dns_records = self._make_request(f"{self.base_url}/cmdb_ci_dns_name", params)
+                self.logger.debug(f"Retrieved {len(dns_records)} DNS records for batch")
+
+                # Group results by CI sys_id
+                for record in dns_records:
+                    ci_sys_id = record["u_cmdb_ci"]["value"]
+                    dns_name = record.get("name", "")
+                    
+                    if dns_name:  # Only add non-empty DNS names
+                        dns_records_map[ci_sys_id].append({
+                            "dns_name": dns_name,
+                            "active": record.get("u_active", "false") == "true"
+                        })
+
+            except ServiceNowAPIError as e:
+                self.logger.warning(f"DNS batch query failed: {e}. Falling back to individual queries")
+
+                # Fallback to individual queries
+                for sys_id in batch:
+                    try:
+                        query = f"u_cmdb_ci={sys_id}"
+                        
+                        if not include_inactive:
+                            query += "^u_active=true"
+
+                        params = {
+                            "sysparm_query": query,
+                            "sysparm_fields": "u_cmdb_ci,name,u_active",
+                            "sysparm_limit": "50",  # Reasonable limit per CI
+                            "sysparm_display_value": "false",
+                        }
+
+                        dns_records = self._make_request(f"{self.base_url}/cmdb_ci_dns_name", params, max_retries=1)
+
+                        for record in dns_records:
+                            dns_name = record.get("name", "")
+                            
+                            if dns_name:  # Only add non-empty DNS names
+                                dns_records_map[sys_id].append({
+                                    "dns_name": dns_name,
+                                    "active": record.get("u_active", "false") == "true"
+                                })
+
+                    except ServiceNowAPIError as e:
+                        self.logger.debug(f"Individual DNS query failed for {sys_id}: {e}")
+                        continue
+
+        total_dns_records = sum(len(records) for records in dns_records_map.values())
+        self.logger.debug(f"Found {total_dns_records} total DNS records for {len(dns_records_map)} CIs")
+
+        return dict(dns_records_map)
+
     def get_contained_children(self, parent_sys_ids, include_inactive=False):
         """Get children for multiple parent sys_ids with intelligent batching"""
         if not parent_sys_ids:
@@ -203,7 +285,7 @@ class ServiceNowCMDBExplorer:
         return dict(children_map)
 
     def get_ci_details_bulk(self, sys_ids, include_inactive=False):
-        """Get CI details in optimized batches"""
+        """Get CI details in optimized batches with DNS records"""
         if not sys_ids:
             return {}
 
@@ -232,17 +314,37 @@ class ServiceNowCMDBExplorer:
                 cis = self._make_request(f"{self.base_url}/cmdb_ci", params)
                 self.logger.debug(f"Retrieved {len(cis)} CI details for chunk")
 
-                # Store results with enhanced data
+                # Store results with enhanced data (without DNS records yet)
                 for ci in cis:
                     details[ci["sys_id"]] = {
                         **ci,
-                        "ip_addresses": [],  # Placeholder for future enhancement
+                        "dns_records": [],  # Will be populated below
                         **self._generate_links(ci["sys_id"]),
                     }
 
             except ServiceNowAPIError as e:
                 self.logger.warning(f"Failed to get details for chunk: {e}")
                 continue
+
+        # Get DNS records for all CIs that were successfully retrieved
+        if details:
+            self.logger.debug("Fetching DNS records for retrieved CIs")
+            try:
+                dns_records_map = self.get_dns_records_bulk(list(details.keys()), include_inactive)
+                
+                # Attach DNS records to CI details
+                for sys_id, dns_records in dns_records_map.items():
+                    if sys_id in details:
+                        details[sys_id]["dns_records"] = dns_records
+                        
+                        # Also create a simplified list of just DNS names for backward compatibility
+                        details[sys_id]["ip_addresses"] = [record["dns_name"] for record in dns_records]
+                
+                self.stats["dns_records_retrieved"] += sum(len(records) for records in dns_records_map.values())
+                
+            except ServiceNowAPIError as e:
+                self.logger.warning(f"Failed to retrieve DNS records: {e}")
+                # Continue without DNS records - CIs will have empty dns_records lists
 
         # Log missing CIs
         missing_count = len(sys_ids) - len(details)
@@ -324,6 +426,7 @@ class ServiceNowCMDBExplorer:
                     "sys_id": sys_id,
                     "name": "UNKNOWN",
                     "sys_class_name": "unknown",
+                    "dns_records": [],
                     "ip_addresses": [],
                     **self._generate_links(sys_id),
                 },
@@ -337,7 +440,8 @@ class ServiceNowCMDBExplorer:
                 "name": ci_data.get("name", "UNKNOWN"),
                 "sys_id": sys_id,
                 "sys_class_name": ci_data.get("sys_class_name", "unknown"),
-                "ip_addresses": ci_data.get("ip_addresses", []),
+                "dns_records": ci_data.get("dns_records", []),
+                "ip_addresses": ci_data.get("ip_addresses", []),  # For backward compatibility
                 "api_link": ci_data.get("api_link"),
                 "ui_link": ci_data.get("ui_link"),
                 "depth": depth,
@@ -441,7 +545,7 @@ def main():
     load_dotenv()
 
     parser = argparse.ArgumentParser(
-        description="Query ServiceNow CMDB containment tree with optimized performance.",
+        description="Query ServiceNow CMDB containment tree with optimized performance and DNS records.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -480,7 +584,7 @@ Examples:
         "--batch-size", type=int, default=DEFAULT_BATCH_SIZE, help=f"API batch size (default: {DEFAULT_BATCH_SIZE})"
     )
     parser.add_argument("--max-depth", type=int, help="Maximum tree depth")
-    parser.add_argument("--include-inactive", action="store_true", help="Include inactive CIs")
+    parser.add_argument("--include-inactive", action="store_true", help="Include inactive CIs and DNS records")
 
     args = parser.parse_args()
 
