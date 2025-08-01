@@ -75,7 +75,7 @@ class ServiceNowCMDBExplorer:
 
         return min(self.batch_size, max(1, int(max_ids * 0.8)))
 
-    def _make_request(self, url, params, max_retries=MAX_RETRIES):
+    def _make_api_request(self, url, params, max_retries=MAX_RETRIES):
         """Make HTTP request with retry logic and comprehensive error handling"""
         for attempt in range(max_retries + 1):
             try:
@@ -164,7 +164,7 @@ class ServiceNowCMDBExplorer:
                     "sysparm_display_value": "false",
                 }
 
-                dns_records = self._make_request(f"{self.base_url}/cmdb_ci_dns_name", params)
+                dns_records = self._make_api_request(f"{self.base_url}/cmdb_ci_dns_name", params)
                 self.logger.debug(f"Retrieved {len(dns_records)} DNS records for batch")
 
                 # Group results by CI sys_id
@@ -195,7 +195,7 @@ class ServiceNowCMDBExplorer:
                             "sysparm_display_value": "false",
                         }
 
-                        dns_records = self._make_request(f"{self.base_url}/cmdb_ci_dns_name", params, max_retries=1)
+                        dns_records = self._make_api_request(f"{self.base_url}/cmdb_ci_dns_name", params, max_retries=1)
 
                         for record in dns_records:
                             dns_name = record.get("name", "")
@@ -241,7 +241,7 @@ class ServiceNowCMDBExplorer:
                     "sysparm_display_value": "false",
                 }
 
-                relationships = self._make_request(f"{self.base_url}/cmdb_rel_ci", params)
+                relationships = self._make_api_request(f"{self.base_url}/cmdb_rel_ci", params)
                 self.logger.debug(f"Batched query returned {len(relationships)} relationships")
 
                 # Group results by parent
@@ -266,7 +266,7 @@ class ServiceNowCMDBExplorer:
                             "sysparm_display_value": "false",
                         }
 
-                        relationships = self._make_request(f"{self.base_url}/cmdb_rel_ci", params, max_retries=1)
+                        relationships = self._make_api_request(f"{self.base_url}/cmdb_rel_ci", params, max_retries=1)
 
                         for rel in relationships:
                             parent_id = rel["parent"]["value"]
@@ -309,7 +309,7 @@ class ServiceNowCMDBExplorer:
                     "sysparm_display_value": "false",
                 }
 
-                cis = self._make_request(f"{self.base_url}/cmdb_ci", params)
+                cis = self._make_api_request(f"{self.base_url}/cmdb_ci", params)
                 self.logger.debug(f"Retrieved {len(cis)} CI details for chunk")
 
                 # Store results with enhanced data (without DNS records yet)
@@ -470,7 +470,7 @@ class ServiceNowCMDBExplorer:
         try:
             params = {"sysparm_query": f"sys_id={sys_id}", "sysparm_limit": "1"}
 
-            result = self._make_request(f"{self.base_url}/{table}", params)
+            result = self._make_api_request(f"{self.base_url}/{table}", params)
             if result:
                 result = result[0]
 
@@ -486,7 +486,7 @@ class ServiceNowCMDBExplorer:
         """Test connection to ServiceNow instance"""
         try:
             params = {"sysparm_limit": "1"}
-            self._make_request(f"{self.base_url}/cmdb_ci", params)
+            self._make_api_request(f"{self.base_url}/cmdb_ci", params)
             return True
         except ServiceNowAPIError:
             return False
@@ -502,7 +502,7 @@ class ServiceNowCMDBExplorer:
                 "sysparm_display_value": "false",
             }
 
-            result = self._make_request(url, params)
+            result = self._make_api_request(url, params)
             self.logger.debug(f"Relationship info for {sys_id}")
             self.logger.debug("=" * 40)
             self.logger.debug(f"\n{pprint.pformat(result)}")
