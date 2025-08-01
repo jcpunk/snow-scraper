@@ -415,7 +415,6 @@ class ServiceNowCMDBExplorer:
 
         # Build tree structure recursively
         def build_node(sys_id, depth=0):
-            # Get CI details or create unknown node
             ci_data = ci_details.get(
                 sys_id,
                 {
@@ -427,28 +426,35 @@ class ServiceNowCMDBExplorer:
                 },
             )
 
-            # Build child nodes
-            children = [build_node(child_id, depth + 1) for child_id in parent_map.get(sys_id, [])]
+            # Recursively build and filter children
+            children = []
+            for child_id in parent_map.get(sys_id, []):
+                child_node = build_node(child_id, depth + 1)
+                if child_node is not None:
+                    children.append(child_node)
 
-            # Create node structure
+            # Collect dns_records only if non-empty
+            dns_records = ci_data.get("dns_records", [])
+            has_dns_records = bool(dns_records)
+
+            # Prune node if it has no children and no dns_records
+            if not has_dns_records and not children:
+                return None
+
             node = {
                 "name": ci_data.get("name", "UNKNOWN"),
                 "sys_id": sys_id,
                 "sys_class_name": ci_data.get("sys_class_name", "unknown"),
-                "dns_records": ci_data.get("dns_records", []),
                 "api_link": ci_data.get("api_link"),
                 "ui_link": ci_data.get("ui_link"),
                 "depth": depth,
             }
 
-            # Only add children if they exist
+            if has_dns_records:
+                node["dns_records"] = dns_records
+
             if children:
                 node["children"] = children
-
-            # Add dns_records only if non-empty
-            dns_records = ci_data.get("dns_records", [])
-            if dns_records:
-                node["dns_records"] = dns_records
 
             return node
 
