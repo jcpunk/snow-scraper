@@ -149,14 +149,14 @@ class ServiceNowCMDBExplorer:
             try:
                 answers = self.dns_resolver.resolve(name, "A")
                 ipv4 = sorted([r.to_text() for r in answers]) if answers.rrset else []
-                self.stats["dns_records_found_ipv4"] += 1
+                self.stats["dns_records_link_to_ipv4"] += 1
             except dns.exception.DNSException:
                 pass
 
             try:
                 answers = self.dns_resolver.resolve(name, "AAAA")
                 ipv6 = sorted([r.to_text() for r in answers]) if answers.rrset else []
-                self.stats["dns_records_found_ipv6"] += 1
+                self.stats["dns_records_link_to_ipv6"] += 1
             except dns.exception.DNSException:
                 pass
 
