@@ -153,7 +153,7 @@ class ServiceNowCMDBExplorer:
                 # Build query for batch of sys_ids - using IN operator for batch
                 # For reference fields, we need to use the field name directly with IN
                 query = f"u_cmdb_ciIN{','.join(batch)}"
-                
+
                 if not include_inactive:
                     query += "^u_active=true"
 
@@ -171,12 +171,11 @@ class ServiceNowCMDBExplorer:
                 for record in dns_records:
                     ci_sys_id = record["u_cmdb_ci"]["value"]
                     dns_name = record.get("name", "")
-                    
+
                     if dns_name:  # Only add non-empty DNS names
-                        dns_records_map[ci_sys_id].append({
-                            "dns_name": dns_name,
-                            "active": record.get("u_active", "false") == "true"
-                        })
+                        dns_records_map[ci_sys_id].append(
+                            {"dns_name": dns_name, "active": record.get("u_active", "false") == "true"}
+                        )
 
             except ServiceNowAPIError as e:
                 self.logger.warning(f"DNS batch query failed: {e}. Falling back to individual queries")
@@ -185,7 +184,7 @@ class ServiceNowCMDBExplorer:
                 for sys_id in batch:
                     try:
                         query = f"u_cmdb_ci={sys_id}"
-                        
+
                         if not include_inactive:
                             query += "^u_active=true"
 
@@ -200,12 +199,11 @@ class ServiceNowCMDBExplorer:
 
                         for record in dns_records:
                             dns_name = record.get("name", "")
-                            
+
                             if dns_name:  # Only add non-empty DNS names
-                                dns_records_map[sys_id].append({
-                                    "dns_name": dns_name,
-                                    "active": record.get("u_active", "false") == "true"
-                                })
+                                dns_records_map[sys_id].append(
+                                    {"dns_name": dns_name, "active": record.get("u_active", "false") == "true"}
+                                )
 
                     except ServiceNowAPIError as e:
                         self.logger.debug(f"Individual DNS query failed for {sys_id}: {e}")
@@ -331,15 +329,15 @@ class ServiceNowCMDBExplorer:
             self.logger.debug("Fetching DNS records for retrieved CIs")
             try:
                 dns_records_map = self.get_dns_records_bulk(list(details.keys()), include_inactive)
-                
+
                 # Attach DNS records to CI details
                 for sys_id, dns_records in dns_records_map.items():
                     if sys_id in details:
                         # Also create a simplified list of just DNS names for backward compatibility
                         details[sys_id]["dns_records"] = [record["dns_name"] for record in dns_records]
-                
+
                 self.stats["dns_records_retrieved"] += sum(len(records) for records in dns_records_map.values())
-                
+
             except ServiceNowAPIError as e:
                 self.logger.warning(f"Failed to retrieve DNS records: {e}")
                 # Continue without DNS records - CIs will have empty dns_records lists
@@ -446,6 +444,11 @@ class ServiceNowCMDBExplorer:
             # Only add children if they exist
             if children:
                 node["children"] = children
+
+            # Add dns_records only if non-empty
+            dns_records = ci_data.get("dns_records", [])
+            if dns_records:
+                node["dns_records"] = dns_records
 
             return node
 
