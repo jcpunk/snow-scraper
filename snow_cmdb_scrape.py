@@ -10,6 +10,8 @@ import time
 from collections import defaultdict, deque
 from urllib.parse import urlencode
 
+import dns.exception
+import dns.resolver
 import requests
 from dotenv import load_dotenv
 from requests.auth import HTTPBasicAuth
@@ -35,6 +37,9 @@ class ServiceNowCMDBExplorer:
         self.instance = instance
         self.batch_size = batch_size
         self.base_url = f"https://{instance}/api/now/table"
+
+        # Setup a DNS resolver
+        self.dns_resolver = dns.resolver.Resolver()
 
         # Session setup with auth and headers
         self.session = requests.Session()
@@ -133,6 +138,38 @@ class ServiceNowCMDBExplorer:
             query_parts.extend(["parent.u_active=true", "child.u_active=true"])
 
         return "^".join(query_parts)
+
+    def resolve_dns_names(self, dns_names):
+        """Resolve a list of DNS names to IPv4 and IPv6 addresses"""
+        result = {}
+
+        self.stats["dns_records_checked_ipv4"] = 0
+        self.stats["dns_records_checked_ipv6"] = 0
+        for name in dns_names:
+            ipv4, ipv6 = [], []
+
+            try:
+                self.stats["dns_records_checked_ipv4"] += 1
+                answers = self.dns_resolver.resolve(name, "A")
+                ipv4 = sorted([r.to_text() for r in answers]) if answers.rrset else []
+            except dns.exception.DNSException:
+                pass
+
+            try:
+                self.stats["dns_records_checked_ipv6"] += 1
+                answers = self.dns_resolver.resolve(name, "AAAA")
+                ipv6 = sorted([r.to_text() for r in answers]) if answers.rrset else []
+            except dns.exception.DNSException:
+                pass
+
+            if ipv4 or ipv6:
+                result[name] = {
+                    "ipv4": ipv4,
+                    "ipv6": ipv6,
+                    "dual_stack": bool(ipv4 and ipv6),
+                }
+
+        return result
 
     def get_dns_records_bulk(self, sys_ids, include_inactive=False):
         """Get DNS records for multiple CI sys_ids with intelligent batching"""
@@ -326,21 +363,30 @@ class ServiceNowCMDBExplorer:
 
         # Get DNS records for all CIs that were successfully retrieved
         if details:
-            self.logger.debug("Fetching DNS records for retrieved CIs")
+            self.logger.info("Fetching DNS records for retrieved CIs")
             try:
                 dns_records_map = self.get_dns_records_bulk(list(details.keys()), include_inactive)
 
                 # Attach DNS records to CI details
                 for sys_id, dns_records in dns_records_map.items():
                     if sys_id in details:
-                        # Also create a simplified list of just DNS names for backward compatibility
-                        details[sys_id]["dns_records"] = [record["dns_name"] for record in dns_records]
+                        details[sys_id]["dns_records"] = sorted({record['dns_name'] for record in dns_records})
 
                 self.stats["dns_records_retrieved"] += sum(len(records) for records in dns_records_map.values())
+
 
             except ServiceNowAPIError as e:
                 self.logger.warning(f"Failed to retrieve DNS records: {e}")
                 # Continue without DNS records - CIs will have empty dns_records lists
+
+            self.logger.info(f"Resolving DNS names to IP addresses")
+            try:
+                for sysid in details:
+                    if details[sysid]['dns_records']:
+                        details[sysid]['ip_addresses'] = self.resolve_dns_names(details[sysid]['dns_records'])
+            except Exception as e:
+                self.logger.warning(f"Failed to resolve DNS records: {e}")
+                # Continue without resolving DNS records - CIs will have empty ip_addresses
 
         # Log missing CIs
         missing_count = len(sys_ids) - len(details)
@@ -452,6 +498,10 @@ class ServiceNowCMDBExplorer:
 
             if has_dns_records:
                 node["dns_records"] = dns_records
+
+                ip_info = ci_data.get("ip_addresses")
+                if ip_info:
+                    node["ip_addresses"] = ip_info
 
             if children:
                 node["children"] = children
