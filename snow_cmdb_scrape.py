@@ -147,16 +147,16 @@ class ServiceNowCMDBExplorer:
             ipv4, ipv6 = [], []
 
             try:
-                self.stats["dns_records_checked_ipv4"] += 1
                 answers = self.dns_resolver.resolve(name, "A")
                 ipv4 = sorted([r.to_text() for r in answers]) if answers.rrset else []
+                self.stats["dns_records_found_ipv4"] += 1
             except dns.exception.DNSException:
                 pass
 
             try:
-                self.stats["dns_records_checked_ipv6"] += 1
                 answers = self.dns_resolver.resolve(name, "AAAA")
                 ipv6 = sorted([r.to_text() for r in answers]) if answers.rrset else []
+                self.stats["dns_records_found_ipv6"] += 1
             except dns.exception.DNSException:
                 pass
 
@@ -339,7 +339,7 @@ class ServiceNowCMDBExplorer:
 
                 params = {
                     "sysparm_query": query,
-                    "sysparm_fields": "sys_id,name,sys_class_name",
+                    "sysparm_fields": "sys_id,name",
                     "sysparm_limit": str(len(chunk) * 2),  # Safety margin
                     "sysparm_display_value": "false",
                 }
@@ -378,8 +378,6 @@ class ServiceNowCMDBExplorer:
                 # Continue without DNS records - CIs will have empty dns_records lists
 
             self.logger.info(f"Resolving DNS names to IP addresses")
-            self.stats["dns_records_checked_ipv4"] = 0
-            self.stats["dns_records_checked_ipv6"] = 0
             try:
                 for sysid in details:
                     if details[sysid]['dns_records']:
@@ -466,7 +464,6 @@ class ServiceNowCMDBExplorer:
                 {
                     "sys_id": sys_id,
                     "name": "UNKNOWN",
-                    "sys_class_name": "unknown",
                     "dns_records": [],
                     **self._generate_links(sys_id),
                 },
@@ -490,7 +487,6 @@ class ServiceNowCMDBExplorer:
             node = {
                 "name": ci_data.get("name", "UNKNOWN"),
                 "sys_id": sys_id,
-                "sys_class_name": ci_data.get("sys_class_name", "unknown"),
                 "api_link": ci_data.get("api_link"),
                 "ui_link": ci_data.get("ui_link"),
                 "depth": depth,
