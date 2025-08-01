@@ -159,7 +159,7 @@ class ServiceNowCMDBExplorer:
 
                 params = {
                     "sysparm_query": query,
-                    "sysparm_fields": "u_cmdb_ci,name,u_active",
+                    "sysparm_fields": "u_cmdb_ci,name",
                     "sysparm_limit": str(len(batch) * 10),  # Allow multiple DNS records per CI
                     "sysparm_display_value": "false",
                 }
@@ -335,10 +335,8 @@ class ServiceNowCMDBExplorer:
                 # Attach DNS records to CI details
                 for sys_id, dns_records in dns_records_map.items():
                     if sys_id in details:
-                        details[sys_id]["dns_records"] = dns_records
-                        
                         # Also create a simplified list of just DNS names for backward compatibility
-                        details[sys_id]["ip_addresses"] = [record["dns_name"] for record in dns_records]
+                        details[sys_id]["dns_records"] = [record["dns_name"] for record in dns_records]
                 
                 self.stats["dns_records_retrieved"] += sum(len(records) for records in dns_records_map.values())
                 
@@ -427,7 +425,6 @@ class ServiceNowCMDBExplorer:
                     "name": "UNKNOWN",
                     "sys_class_name": "unknown",
                     "dns_records": [],
-                    "ip_addresses": [],
                     **self._generate_links(sys_id),
                 },
             )
@@ -441,7 +438,6 @@ class ServiceNowCMDBExplorer:
                 "sys_id": sys_id,
                 "sys_class_name": ci_data.get("sys_class_name", "unknown"),
                 "dns_records": ci_data.get("dns_records", []),
-                "ip_addresses": ci_data.get("ip_addresses", []),  # For backward compatibility
                 "api_link": ci_data.get("api_link"),
                 "ui_link": ci_data.get("ui_link"),
                 "depth": depth,
