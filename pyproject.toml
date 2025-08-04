@@ -1,7 +1,7 @@
 [project]
 name = "snow-cmdb-tree"
 dependencies = [
-  "dns",
+  "aiodns",
   "requests"
 ]
 

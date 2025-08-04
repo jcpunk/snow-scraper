@@ -8,7 +8,7 @@ and outputs a JSON tree structure with IP address resolution.
 
 Key Features:
 - Optimized batching to minimize API calls and avoid URL length limits
-- Asynchronous DNS record retrieval and IP address resolution with fallback
+- Asynchronous DNS record retrieval and IP address resolution
 - Cycle detection during tree traversal
 - Comprehensive error handling with retries
 - Inactive CI filtering
@@ -31,23 +31,14 @@ import time
 from collections import defaultdict, deque
 from urllib.parse import urlencode
 
-import dns.exception
-import dns.resolver
+import aiodns
 import requests
 
 from dotenv import load_dotenv
 from requests.auth import HTTPBasicAuth
 
-# Try to import aiodns for async DNS resolution
-try:
-    import aiodns
-except ImportError:
-    aiodns = None
-
 # ServiceNow API Configuration
-RELATIONSHIP_SYS_ID = [
-    "55c95bf6c0a8010e0118ec7056ebc54d"  # Contained by
-]
+RELATIONSHIP_SYS_ID = ["55c95bf6c0a8010e0118ec7056ebc54d"]  # Contained by
 DEFAULT_BATCH_SIZE = 50
 MAX_RETRIES = 3
 RETRY_DELAY = 2
@@ -67,7 +58,7 @@ class ServiceNowCMDBExplorer:
 
     This class handles all interactions with the ServiceNow API, including:
     - CI relationship queries with intelligent batching
-    - DNS record retrieval and IP resolution (async with fallback)
+    - DNS record retrieval and IP resolution (async only)
     - Connection validation and error handling
     - Performance optimization through batch processing
     """
@@ -87,20 +78,8 @@ class ServiceNowCMDBExplorer:
         self.batch_size = batch_size
         self.base_url = f"https://{instance}/api/now/table"
 
-        # DNS resolvers - async with blocking fallback
-        self.async_resolver = None
-        if aiodns:
-            try:
-                self.async_resolver = aiodns.DNSResolver()
-                self.logger.debug("Using aiodns for asynchronous DNS resolution")
-            except Exception as e:
-                self.async_resolver = None
-                self.logger.info(f"Failed to initialize aiodns: {e}. Falling back to blocking DNS")
-        else:
-            self.logger.debug("aiodns not available. Using blocking DNS resolver")
-
-        # Blocking DNS resolver as fallback
-        self.dns_resolver = dns.resolver.Resolver()
+        self.async_resolver = aiodns.DNSResolver()
+        self.logger.debug("Using aiodns for asynchronous DNS resolution")
 
         # Configure HTTP session with authentication and headers
         self.session = requests.Session()
@@ -348,9 +327,6 @@ class ServiceNowCMDBExplorer:
         Returns:
             tuple: (ipv4_list, ipv6_list) containing resolved addresses
         """
-        if not self.async_resolver:
-            return [], []
-
         ipv4, ipv6 = [], []
 
         try:
@@ -380,40 +356,6 @@ class ServiceNowCMDBExplorer:
 
         return ipv4, ipv6
 
-    def _resolve_dns_sync(self, name):
-        """
-        Synchronously resolve DNS name to IPv4 and IPv6 addresses (fallback).
-
-        Args:
-            name (str): DNS name to resolve
-
-        Returns:
-            tuple: (ipv4_list, ipv6_list) containing resolved addresses
-        """
-        ipv4, ipv6 = [], []
-
-        # Resolve A records (IPv4)
-        try:
-            answers = self.dns_resolver.resolve(name, "A")
-            ipv4 = sorted([r.to_text() for r in answers]) if answers.rrset else []
-            if ipv4:
-                with self._stats_lock:
-                    self.stats["dns_records_link_to_ipv4"] += 1
-        except dns.exception.DNSException:
-            pass
-
-        # Resolve AAAA records (IPv6)
-        try:
-            answers = self.dns_resolver.resolve(name, "AAAA")
-            ipv6 = sorted([r.to_text() for r in answers]) if answers.rrset else []
-            if ipv6:
-                with self._stats_lock:
-                    self.stats["dns_records_link_to_ipv6"] += 1
-        except dns.exception.DNSException:
-            pass
-
-        return ipv4, ipv6
-
     async def _resolve_dns_names_async(self, dns_names):
         """
         Resolve multiple DNS names asynchronously with concurrency limit.
@@ -424,7 +366,7 @@ class ServiceNowCMDBExplorer:
         Returns:
             dict: Mapping of DNS name to resolution results
         """
-        if not dns_names or not self.async_resolver:
+        if not dns_names:
             return {}
 
         result = {}
@@ -463,14 +405,14 @@ class ServiceNowCMDBExplorer:
             return result
 
         except Exception as e:
-            self.logger.warning(f"Async DNS resolution failed: {e}. Falling back to blocking DNS")
+            self.logger.warning(f"Async DNS resolution failed: {e}")
             with self._stats_lock:
-                self.stats["async_dns_fallbacks"] += 1
+                self.stats["async_dns_errors"] += 1
             return {}
 
     def resolve_dns_names(self, dns_names):
         """
-        Resolve DNS names to IPv4 and IPv6 addresses with async/sync fallback.
+        Resolve DNS names to IPv4 and IPv6 addresses with async tasks.
 
         Args:
             dns_names (list): List of DNS names to resolve
@@ -483,52 +425,36 @@ class ServiceNowCMDBExplorer:
 
         result = {}
 
-        # Try async resolution first if available
-        if self.async_resolver:
+        try:
+            # Run async DNS resolution
+            loop = None
             try:
-                # Run async DNS resolution
-                loop = None
-                try:
-                    loop = asyncio.get_event_loop()
-                except RuntimeError:
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
 
-                if loop.is_running():
-                    # If we're already in an async context, create a new event loop
-                    import concurrent.futures
+            if loop.is_running():
+                # If we're already in an async context, create a new event loop
+                import concurrent.futures
 
-                    with concurrent.futures.ThreadPoolExecutor() as executor:
-                        future = executor.submit(self._run_async_dns, dns_names)
-                        result = future.result(timeout=65.0)
-                else:
-                    result = loop.run_until_complete(self._resolve_dns_names_async(dns_names))
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(self._run_async_dns, dns_names)
+                    result = future.result(timeout=65.0)
+            else:
+                result = loop.run_until_complete(self._resolve_dns_names_async(dns_names))
 
-                if result:
-                    self.logger.debug(f"Async DNS resolved {len(result)} names")
-                    return result
-                else:
-                    self.logger.debug("Async DNS returned no results, falling back to sync")
+            if result:
+                self.logger.debug(f"Async DNS resolved {len(result)} names")
+                return result
+            else:
+                self.logger.debug("Async DNS returned no results")
 
-            except Exception as e:
-                self.logger.warning(f"Async DNS resolution failed: {e}. Using blocking DNS")
-                with self._stats_lock:
-                    self.stats["async_dns_errors"] += 1
+        except Exception as e:
+            self.logger.warning(f"Async DNS resolution failed: {e}")
+            with self._stats_lock:
+                self.stats["async_dns_errors"] += 1
 
-        # Fallback to synchronous resolution
-        self.logger.debug("Using blocking DNS resolver")
-        for name in dns_names:
-            ipv4, ipv6 = self._resolve_dns_sync(name)
-
-            if ipv4 or ipv6:
-                result[name] = {
-                    "ipv4": ipv4,
-                    "ipv6": ipv6,
-                    "dual_stack": bool(ipv4 and ipv6),
-                }
-
-        with self._stats_lock:
-            self.stats["sync_dns_resolutions"] += len(result)
         return result
 
     def _run_async_dns(self, dns_names):
@@ -574,9 +500,7 @@ class ServiceNowCMDBExplorer:
             dns_name = record.get("name", "").strip()
 
             if dns_name:  # Only store non-empty DNS names
-                dns_records_map[ci_sys_id].append(
-                    {"dns_name": dns_name}
-                )
+                dns_records_map[ci_sys_id].append({"dns_name": dns_name})
 
         total_dns_records = sum(len(records) for records in dns_records_map.values())
         self.logger.debug(f"Found {total_dns_records} DNS records for {len(dns_records_map)} CIs")
@@ -596,7 +520,7 @@ class ServiceNowCMDBExplorer:
         """
         # The relationship can be active even if the related CI is inactive.
         # As a result this will return inactive CIs for some elements
-        query_template = "parentIN{}^type=" + '%2C'.join(RELATIONSHIP_SYS_ID)
+        query_template = "parentIN{}^type=" + "%2C".join(RELATIONSHIP_SYS_ID)
         results = self._batch_api_call(
             endpoint="cmdb_rel_ci",
             sys_ids=parent_sys_ids,
