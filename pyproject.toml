@@ -2,6 +2,7 @@
 name = "snow-cmdb-tree"
 dependencies = [
   "aiodns",
+  "dotenv",
   "requests"
 ]
 
