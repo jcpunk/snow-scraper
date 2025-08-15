@@ -564,7 +564,7 @@ class ServiceNowCMDBExplorer:
             endpoint="cmdb_ci",
             sys_ids=sys_ids,
             query_template="sys_idIN{}",
-            fields="sys_id,name",
+            fields="sys_id,name,short_description",
             include_inactive=include_inactive,
             limit_per_id=2,
         )
@@ -708,6 +708,7 @@ class ServiceNowCMDBExplorer:
                 {
                     "sys_id": sys_id,
                     "name": "UNKNOWN",
+                    "short_description": "",
                     "dns_records": [],
                     "ip_addresses": {},
                     **self._generate_links(sys_id),
@@ -732,8 +733,9 @@ class ServiceNowCMDBExplorer:
 
             # Build node structure
             node = {
-                "name": ci_data.get("name", "UNKNOWN"),
                 "sys_id": sys_id,
+                "name": ci_data.get("name", "UNKNOWN"),
+                "short_description": ci_data.get("short_description", ""),
                 "api_link": ci_data.get("api_link"),
                 "ui_link": ci_data.get("ui_link"),
                 "depth": depth,
